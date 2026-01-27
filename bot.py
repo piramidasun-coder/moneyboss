@@ -41,6 +41,11 @@ if AI_API_KEY and "YOUR_KEY" not in AI_API_KEY:
         base_url=AI_BASE_URL,
     )
 
+# --- MEMORY STORAGE ---
+# Simple in-memory storage: {user_id: [{"role": "user", "content": "..."}, ...]}
+user_history = {}
+HISTORY_LIMIT = 10 # Сколько сообщений помнить (5 пар вопрос-ответ)
+
 # --- ADMINS LIST ---
 ADMIN_IDS = [] 
 
@@ -144,35 +149,57 @@ class ReportAction(CallbackData, prefix="rep"):
 router = Router()
 
 # --- AI HELPER FUNCTION ---
-async def get_ai_response(user_message: str, context: str = "") -> str:
+async def get_ai_response(user_message: str, context: str = "", user_id: int = 0) -> str:
     if not ai_client:
-        return "🧠 Мозг AI пока не подключен (нет ключа). Но я все равно слежу за тобой!"
+        return "🧠 Мозг AI пока не подключен. Но я все равно слежу за тобой!"
     
     now = datetime.now()
     days_until = (START_DATE - now).days + 1
     
+    # Формируем динамическую инструкцию по ссылкам
     if now < START_DATE:
         link_instruction = "ВАЖНО: До 29 января ССЫЛКИ НА ОПЛАТУ НЕ ДАВАЙ. Просто говори, что скоро начнем."
-        marathon_status = f"До старта марафона {max(0, days_until)} дн. Сейчас этап прогрева и сбора людей. Старт 29 января."
+        marathon_status = f"До старта марафона {max(0, days_until)} дн. Этап прогрева. Ссылки на оплату ЗАПРЕЩЕНЫ."
     else:
         link_instruction = f"Если уместно, напоминай про ссылку для оплаты: {PAYMENT_INFO}"
         current_day = (now - START_DATE).days + 1
         marathon_status = f"Марафон ИДЕТ. Сегодня {current_day}-й день из 7."
 
-    try:
-        current_date_str = now.strftime('%d.%m.%Y')
-        completion = await ai_client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + 
+    # --- MEMORY MANAGEMENT ---
+    if user_id not in user_history:
+        user_history[user_id] = []
+    
+    # Добавляем сообщение юзера в историю
+    user_history[user_id].append({"role": "user", "content": f"Контекст: {context}\nСообщение: {user_message}"})
+    
+    # Обрезаем историю, если слишком длинная
+    if len(user_history[user_id]) > HISTORY_LIMIT:
+        user_history[user_id] = user_history[user_id][-HISTORY_LIMIT:]
+
+    # Формируем полный промпт
+    current_date_str = now.strftime('%d.%m.%Y')
+    system_msg = {
+        "role": "system", 
+        "content": SYSTEM_PROMPT + 
                  f"\n\nСЕГОДНЯШНЯЯ ДАТА: {current_date_str} (2026 ГОД!). Не путай год, сейчас 2026!" +
                  f"\nТЕКУЩИЙ СТАТУС МАРАФОНА: {marathon_status}" +
                  f"\n{link_instruction}" +
-                 "\nПРАВИЛО ОФОРМЛЕНИЯ: Не используй Markdown скобки []. Пиши ссылки просто текстом или делай их красивыми через HTML (например <a href='ссылка'>текст</a>)."},
-                {"role": "user", "content": f"Контекст: {context}\nСообщение юзера: {user_message}"}
-            ]
+                 "\nПРАВИЛО ОФОРМЛЕНИЯ: Не используй Markdown скобки []. Пиши ссылки просто текстом или делай их красивыми через HTML (например <a href='ссылка'>текст</a>)."
+    }
+    
+    messages_payload = [system_msg] + user_history[user_id]
+
+    try:
+        completion = await ai_client.chat.completions.create(
+            model=AI_MODEL,
+            messages=messages_payload
         )
-        return completion.choices[0].message.content
+        ai_reply = completion.choices[0].message.content
+        
+        # Сохраняем ответ бота в историю
+        user_history[user_id].append({"role": "assistant", "content": ai_reply})
+        
+        return ai_reply
     except Exception as e:
         logging.error(f"AI Error: {e}")
         return "🤯 Перегрелся процессор... Попробуй позже!"
@@ -226,7 +253,7 @@ async def process_report(message: types.Message):
 
     # Проверка даты
     if datetime.now() < START_DATE:
-        ai_msg = await get_ai_response("Я пытаюсь скинуть отчет до старта игры. Отфутболь меня красиво, скажи что ждем 29 января.")
+        ai_msg = await get_ai_response("Я пытаюсь скинуть отчет до старта игры. Отфутболь меня красиво, скажи что ждем 29 января.", user_id=user.id)
         await message.reply(ai_msg)
         return
     
@@ -236,7 +263,8 @@ async def process_report(message: types.Message):
         if member.status in ["creator", "administrator"]:
             ai_comment = await get_ai_response(
                 f"Админ {user.first_name} прислал что-то похожее на отчет. Напомни ему в шутливой форме, что админы вне игры, но их пример вдохновляет.",
-                context="Админ скинул отчет"
+                context="Админ скинул отчет",
+                user_id=user.id
             )
             await message.reply(ai_comment)
             return
@@ -248,10 +276,12 @@ async def process_report(message: types.Message):
 
     db.upsert_user(user)
 
+    # Use AI to generate hype/roast
     safe_name = user.first_name
     ai_comment = await get_ai_response(
         f"Пользователь {safe_name} заработал {amount} рублей. Если сумма маленькая (<5000) — пошути над ним. Если большая — восхитись.",
-        context="Отчет о доходе"
+        context="Отчет о доходе",
+        user_id=user.id
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -276,7 +306,7 @@ async def cb_pay_later(callback: types.CallbackQuery, callback_data: ReportActio
     tax = int(callback_data.amount * 0.1)
     db.add_income_pay_later(callback.from_user.id, callback_data.amount, tax)
     
-    ai_comment = await get_ai_response("Пользователь решил не платить налог сейчас, а записать в долг. Пошути про коллекторов или проценты.")
+    ai_comment = await get_ai_response("Пользователь решил не платить налог сейчас, а записать в долг. Пошути про коллекторов или проценты.", user_id=callback.from_user.id)
     
     await callback.message.edit_text(
         f"✍️ Записал: +{callback_data.amount} руб.\n"
@@ -312,7 +342,7 @@ async def process_proof(message: types.Message, state: FSMContext):
     
     db.add_income_pay_now(message.from_user.id, amount)
     
-    ai_comment = await get_ai_response("Пользователь оплатил налог. Похвали его за честность и очищенную карму.")
+    ai_comment = await get_ai_response("Пользователь оплатил налог. Похвали его за честность и очищенную карму.", user_id=message.from_user.id)
     
     await msg_wait.delete()
     await message.reply(f"✅ Оплата принята!\n\n🤖 {ai_comment}")
@@ -335,7 +365,7 @@ async def chat_with_ai(message: types.Message):
     
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
-    response = await get_ai_response(f"{user_name}: {user_text}", context=context)
+    response = await get_ai_response(f"{user_name}: {user_text}", context=context, user_id=message.from_user.id)
     await message.reply(response)
 
 async def send_daily_motivation(bot: Bot):
