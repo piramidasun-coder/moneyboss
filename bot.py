@@ -160,11 +160,13 @@ async def get_ai_response(user_message: str, context: str = "") -> str:
         marathon_status = f"Марафон ИДЕТ. Сегодня {current_day}-й день из 7."
 
     try:
+        current_date_str = now.strftime('%d.%m.%Y')
         completion = await ai_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT + 
-                 f"\n\nТЕКУЩИЙ СТАТУС: {marathon_status}" +
+                 f"\n\nСЕГОДНЯШНЯЯ ДАТА: {current_date_str} (2026 ГОД!). Не путай год, сейчас 2026!" +
+                 f"\nТЕКУЩИЙ СТАТУС МАРАФОНА: {marathon_status}" +
                  f"\n{link_instruction}" +
                  "\nПРАВИЛО ОФОРМЛЕНИЯ: Не используй Markdown скобки []. Пиши ссылки просто текстом или делай их красивыми через HTML (например <a href='ссылка'>текст</a>)."},
                 {"role": "user", "content": f"Контекст: {context}\nСообщение юзера: {user_message}"}
