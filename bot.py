@@ -146,15 +146,14 @@ router = Router()
 # --- AI HELPER FUNCTION ---
 async def get_ai_response(user_message: str, context: str = "") -> str:
     if not ai_client:
-        return "🧠 Мозг AI пока не подключен. Но я все равно слежу за тобой!"
+        return "🧠 Мозг AI пока не подключен (нет ключа). Но я все равно слежу за тобой!"
     
     now = datetime.now()
     days_until = (START_DATE - now).days + 1
     
-    # Формируем динамическую инструкцию по ссылкам
     if now < START_DATE:
         link_instruction = "ВАЖНО: До 29 января ССЫЛКИ НА ОПЛАТУ НЕ ДАВАЙ. Просто говори, что скоро начнем."
-        marathon_status = f"До старта марафона {max(0, days_until)} дн. Этап прогрева. Ссылки на оплату ЗАПРЕЩЕНЫ."
+        marathon_status = f"До старта марафона {max(0, days_until)} дн. Сейчас этап прогрева и сбора людей. Старт 29 января."
     else:
         link_instruction = f"Если уместно, напоминай про ссылку для оплаты: {PAYMENT_INFO}"
         current_day = (now - START_DATE).days + 1
