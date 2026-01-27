@@ -64,6 +64,13 @@ SYSTEM_PROMPT = """
 2. Ты общаешься с админами уважительно, как с партнерами по организации этого движа.
 3. Не вовлекай их в соревнование /top.
 
+СТРОГОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ:
+1. НЕ используй Markdown-разметку (**жирный**, *курсив*, # заголовки, - списки).
+2. Пиши ОБЫЧНЫМ текстом с эмодзи.
+3. Используй переносы строк для разделения мыслей.
+4. Если нужен список, пиши через эмодзи (например: 💰 Первое, 🔥 Второе).
+5. НИКАКИХ квадратных скобок [] и звездочек **.
+
 Твоя задача: мотивировать участников зарабатывать больше, платить налог в фонд по ссылке https://newron.ru/moneyboss и создавать движуху.
 """
 
@@ -347,6 +354,24 @@ async def process_proof(message: types.Message, state: FSMContext):
     await msg_wait.delete()
     await message.reply(f"✅ Оплата принята!\n\n🤖 {ai_comment}")
     await state.clear()
+
+# --- NEW MEMBER GREETING ---
+@router.message(F.new_chat_members)
+async def welcome_new_member(message: types.Message):
+    global GROUP_CHAT_ID
+    if message.chat.type in ["group", "supergroup"]:
+        GROUP_CHAT_ID = message.chat.id
+    
+    for new_member in message.new_chat_members:
+        if new_member.is_bot:
+            continue  # Не приветствуем ботов
+        
+        greeting = await get_ai_response(
+            f"В чат зашел новый участник {new_member.first_name}. Поприветствуй его дерзко и весело, расскажи кратко про марафон.",
+            context="Приветствие новичка",
+            user_id=new_member.id
+        )
+        await message.answer(greeting)
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def chat_with_ai(message: types.Message):
