@@ -1,0 +1,13 @@
+[Unit]
+Description=MoneyBoss Telegram Bot
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/moneyboss
+ExecStart=/usr/bin/python3 /root/moneyboss/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

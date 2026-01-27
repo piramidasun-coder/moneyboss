@@ -1,0 +1,7 @@
+.env
+venv/
+__pycache__/
+*.pyc
+moneyboss.db
+*.log
+.DS_Store
