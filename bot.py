@@ -261,11 +261,22 @@ async def silence_checker(bot: Bot):
         await bot.send_message(GROUP_CHAT_ID, ai_res)
         last_msg_time = now
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 async def talk(message: types.Message):
     global last_msg_time
     last_msg_time = datetime.now()
-    if message.chat.type != "private" and "MoneyBoss" not in message.text and not message.reply_to_message: return
+    
+    # В группе отвечаем только на значимые сообщения
+    if message.chat.type in ["group", "supergroup"]:
+        text = message.text.lower()
+        # Игнорируем короткие фразы (меньше 10 символов) - типа "ок", "хаха"
+        if len(text) < 10:
+            return
+        # Отвечаем если есть триггеры: вопросы, действия, упоминание бота
+        triggers = ["?", "как", "что", "почему", "сделал", "звонил", "встреча", "помог", "совет", "monеyboss", "бот"]
+        if not any(word in text for word in triggers):
+            return
+    
     res = await get_ai_response(message.text, "Общение", message.from_user.id)
     await message.reply(res)
 
