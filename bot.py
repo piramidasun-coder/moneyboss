@@ -135,14 +135,16 @@ class ChaosAction(CallbackData, prefix="chs"):
 router = Router()
 last_msg_time = datetime.now()
 
-async def get_ai_response(user_message: str, context: str = "", user_id: int = 0) -> str:
+async def get_ai_response(user_message: str, context: str = "", user_id: int = 0, name: str = "Участник") -> str:
     if not ai_client: return "🧠 Мозг отключен"
     now = datetime.now()
     if user_id not in user_history: user_history[user_id] = []
-    user_history[user_id].append({"role": "user", "content": f"Контекст: {context}\nСообщение: {user_message}"})
+    
+    # Добавляем инфо об имени в каждое сообщение для ИИ
+    user_history[user_id].append({"role": "user", "content": f"Имя юзера: {name}\nКонтекст: {context}\nСообщение: {user_message}"})
     if len(user_history[user_id]) > HISTORY_LIMIT: user_history[user_id] = user_history[user_id][-HISTORY_LIMIT:]
     
-    system_payload = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {now.strftime('%d.%m.%Y')}. Марафон идет."
+    system_payload = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {now.strftime('%d.%m.%Y')}. Марафон идет.\nВАЖНО: Обращайся к юзеру по имени {name}. Учитывай его имя при выборе рода (мужской/женский)."
     try:
         completion = await ai_client.chat.completions.create(
             model=AI_MODEL,
@@ -177,7 +179,7 @@ async def cmd_top(message: types.Message):
 async def welcome(message: types.Message):
     for m in message.new_chat_members:
         if m.is_bot: continue
-        res = await get_ai_response(f"Новичок {m.first_name} зашел", "Приветствие", m.id)
+        res = await get_ai_response(f"Новичок {m.first_name} зашел", "Приветствие", m.id, m.first_name)
         await message.answer(res)
 
 @router.message(F.photo & F.caption)
@@ -192,7 +194,7 @@ async def report(message: types.Message):
     user = message.from_user
     db.upsert_user(user)
     
-    ai_res = await get_ai_response(f"Отчет на {amt} руб", "Денежный успех", user.id)
+    ai_res = await get_ai_response(f"Отчет на {amt} руб", "Денежный успех", user.id, user.first_name)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"💸 Оплатить 10% — {tax}р", callback_data=ReportAction(action="now", amount=amt, user_id=user.id).pack())],
         [InlineKeyboardButton(text="⏳ В долг до финала", callback_data=ReportAction(action="later", amount=amt, user_id=user.id).pack())]
@@ -203,7 +205,7 @@ async def report(message: types.Message):
 async def pay_later(cb: types.CallbackQuery, callback_data: ReportAction):
     if cb.from_user.id != callback_data.user_id: return await cb.answer("Не твое дело!")
     db.update_income(cb.from_user.id, callback_data.amount, int(callback_data.amount*0.1), False)
-    ai_res = await get_ai_response("Выбрал оплату в долг", "Долг", cb.from_user.id)
+    ai_res = await get_ai_response("Выбрал оплату в долг", "Долг", cb.from_user.id, cb.from_user.first_name)
     await cb.message.edit_text(f"Записал в долг! {ai_res}", reply_markup=None)
 
 @router.callback_query(ReportAction.filter(F.action == "now"))
@@ -266,11 +268,20 @@ async def talk(message: types.Message):
     global last_msg_time, GROUP_CHAT_ID
     last_msg_time = datetime.now()
     
-    # Сохраняем ID чата для рассылок (утро/вечер/дождь)
     if message.chat.type in ["group", "supergroup"]:
         GROUP_CHAT_ID = message.chat.id
 
-    res = await get_ai_response(message.text, "Общение", message.from_user.id)
+    res = await get_ai_response(message.text, "Общение", message.from_user.id, message.from_user.first_name)
+    await message.reply(res)
+
+@router.message(F.photo)
+async def photo_message(message: types.Message):
+    global last_msg_time
+    last_msg_time = datetime.now()
+    
+    # Если есть подпись, обрабатываем её как текст
+    text = message.caption if message.caption else "Скриншот/Фото"
+    res = await get_ai_response(text, "Фото с описанием", message.from_user.id, message.from_user.first_name)
     await message.reply(res)
 
 # --- MAIN ---
