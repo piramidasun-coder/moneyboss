@@ -266,17 +266,16 @@ async def talk(message: types.Message):
     global last_msg_time
     last_msg_time = datetime.now()
     
-    # В группе отвечаем только на значимые сообщения
+    # Если это группа, отвечаем только когда обращаются к боту или отвечают ему
+    # Или когда пишут про ключевые бизнес-действия
     if message.chat.type in ["group", "supergroup"]:
         text = message.text.lower()
-        # Игнорируем короткие фразы (меньше 10 символов) - типа "ок", "хаха"
-        if len(text) < 10:
+        is_bot_mentioned = "moneyboss" in text or "бот" in text or (message.reply_to_message and message.reply_to_message.from_user.id == message.bot.id)
+        is_action = any(word in text for word in ["сделал", "звонил", "продал", "встреча", "договор", "клиент", "чек"])
+        
+        if not (is_bot_mentioned or is_action):
             return
-        # Отвечаем если есть триггеры: вопросы, действия, упоминание бота
-        triggers = ["?", "как", "что", "почему", "сделал", "звонил", "встреча", "помог", "совет", "monеyboss", "бот"]
-        if not any(word in text for word in triggers):
-            return
-    
+
     res = await get_ai_response(message.text, "Общение", message.from_user.id)
     await message.reply(res)
 
