@@ -263,18 +263,12 @@ async def silence_checker(bot: Bot):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def talk(message: types.Message):
-    global last_msg_time
+    global last_msg_time, GROUP_CHAT_ID
     last_msg_time = datetime.now()
     
-    # Если это группа, отвечаем только когда обращаются к боту или отвечают ему
-    # Или когда пишут про ключевые бизнес-действия
+    # Сохраняем ID чата для рассылок (утро/вечер/дождь)
     if message.chat.type in ["group", "supergroup"]:
-        text = message.text.lower()
-        is_bot_mentioned = "moneyboss" in text or "бот" in text or (message.reply_to_message and message.reply_to_message.from_user.id == message.bot.id)
-        is_action = any(word in text for word in ["сделал", "звонил", "продал", "встреча", "договор", "клиент", "чек"])
-        
-        if not (is_bot_mentioned or is_action):
-            return
+        GROUP_CHAT_ID = message.chat.id
 
     res = await get_ai_response(message.text, "Общение", message.from_user.id)
     await message.reply(res)
