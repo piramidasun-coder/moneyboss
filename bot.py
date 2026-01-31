@@ -137,7 +137,7 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
         user_history[user_id].append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
-        logging.error(f"AI Error: {e}")
+        logging.error(f"DETAILED AI ERROR: {str(e)}") # Теперь мы увидим реальную причину в логах
         return "🤯 Процессор перегрелся — попробуй позже"
 
 # --- HANDLERS ---
