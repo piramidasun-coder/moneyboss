@@ -6,6 +6,7 @@ import sqlite3
 import random
 import base64
 import io
+import pytz
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -28,7 +29,8 @@ AI_API_KEY = os.getenv("AI_API_KEY")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1")
 AI_MODEL = "openai/gpt-4o"
 
-START_DATE = datetime(2026, 1, 29)
+MSK = pytz.timezone("Europe/Moscow")
+START_DATE = datetime(2026, 1, 29, tzinfo=MSK)
 PAYMENT_LINK = "https://newron.ru/moneyboss"
 DB_NAME = "moneyboss.db"
 
@@ -38,11 +40,11 @@ if AI_API_KEY and "YOUR_KEY" not in AI_API_KEY:
     ai_client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
 
 user_history = {}
-HISTORY_LIMIT = 15 # Увеличил память для более умных диалогов
+HISTORY_LIMIT = 15 
 
 SYSTEM_PROMPT = """
 ТВОЯ РОЛЬ:
-Ты — безумный Наставник и ведущий шоу-игры "Финансовый Поток". Ты ЭКСПЕРТ + ШОУМЕН + ПРОВОКАТОР. 
+Ты — Наставник шоу-игры "Финансовый Поток". Ты ЭКСПЕРТ + ШОУМЕН + ПРОВОКАТОР. 
 Твоя задача — чтобы в чате постоянно был азарт и движение. Ты подначиваешь людей делать деньги.
 Распознавай на картинках суммы чеков и банковских переводов.
 
@@ -134,7 +136,7 @@ class Database:
             return cursor.fetchall()
 
 db = Database(DB_NAME)
-ADMIN_IDS = [8289097456, 12345678] # Твой ID и ID админов
+ADMIN_IDS = [8289097456, 12345678] 
 
 # --- AI LOGIC ---
 async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None, context: str = "Общение") -> str:
@@ -147,7 +149,8 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
     user_history[user_id].append({"role": "user", "content": content})
     if len(user_history[user_id]) > HISTORY_LIMIT: user_history[user_id] = user_history[user_id][-HISTORY_LIMIT:]
     
-    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {datetime.now().strftime('%d.%m.%Y')}. Обращайся к {name}. Соблюдай род. Сейчас разгар бизнес-игры."
+    now_msk = datetime.now(MSK)
+    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {now_msk.strftime('%d.%m.%Y %H:%M')} по МСК. Обращайся к {name}. Соблюдай род. Сейчас разгар бизнес-игры."
     
     try:
         completion = await ai_client.chat.completions.create(model=AI_MODEL, messages=[{"role": "system", "content": system_msg}] + user_history[user_id])
@@ -160,7 +163,7 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
 
 # --- HANDLERS ---
 router = Router()
-last_msg_time = datetime.now()
+last_msg_time = datetime.now(MSK)
 
 class ReportAction(CallbackData, prefix="rep"):
     action: str
@@ -182,7 +185,6 @@ async def cmd_top(message: types.Message):
 
 @router.message(Command("game"))
 async def cmd_manual_game(message: types.Message, bot: Bot):
-    """Секретная команда для админа — запустить игру немедленно"""
     if message.from_user.id not in ADMIN_IDS: return
     await message.answer("🚀 Понял — раздуваю пожар азарта!")
     await trigger_random_event(bot)
@@ -190,7 +192,7 @@ async def cmd_manual_game(message: types.Message, bot: Bot):
 @router.message(F.photo)
 async def handle_photo(message: types.Message):
     global last_msg_time
-    last_msg_time = datetime.now()
+    last_msg_time = datetime.now(MSK)
     if message.chat.type != "private": db.set_chat_id(message.chat.id)
     
     user = message.from_user
@@ -230,9 +232,11 @@ async def pay_now(cb: types.CallbackQuery, callback_data: ReportAction):
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def talk(message: types.Message):
-    global last_msg_time
-    last_msg_time = datetime.now()
-    if message.chat.type != "private": db.set_chat_id(message.chat.id)
+    global last_msg_time, GROUP_CHAT_ID
+    last_msg_time = datetime.now(MSK)
+    if message.chat.type != "private": 
+        GROUP_CHAT_ID = message.chat.id
+        db.set_chat_id(GROUP_CHAT_ID)
     
     res = await get_ai_response(message.text, message.from_user.id, message.from_user.first_name)
     
@@ -304,34 +308,44 @@ async def silence_checker(bot: Bot):
     global last_msg_time
     chat_id = db.get_chat_id()
     if not chat_id: return
-    now = datetime.now()
-    if not (9 <= now.hour < 23): return # Только днем
-    if (now - last_msg_time).total_seconds() > 2400: # 40 минут тишины
+    now_msk = datetime.now(MSK)
+    
+    # Персональные вызовы только с 09:00 до 18:00 по МСК
+    if not (9 <= now_msk.hour < 18): return 
+
+    if (now_msk - last_msg_time).total_seconds() > 2400: # 40 минут тишины
         await trigger_random_event(bot)
-        last_msg_time = now
+        last_msg_time = datetime.now(MSK)
 
 async def main():
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     
-    scheduler = AsyncIOScheduler()
+    # Настраиваем планировщик на Московское время
+    scheduler = AsyncIOScheduler(timezone=MSK)
+    
+    # Доброе утро в 09:00 МСК
     scheduler.add_job(morning, 'cron', hour=9, minute=0, args=[bot])
-    scheduler.add_job(evening, 'cron', hour=22, minute=0, args=[bot])
+    
+    # Спокойной ночи в 21:00 МСК
+    scheduler.add_job(evening, 'cron', hour=21, minute=0, args=[bot])
+    
+    # Проверка тишины каждые 10 минут
     scheduler.add_job(silence_checker, 'interval', minutes=10, args=[bot])
-    # Рандомные события в течение дня
+    
+    # Рандомные события каждые 45 минут (только в рабочее время МСК для азарта)
     scheduler.add_job(trigger_random_event, 'interval', minutes=45, args=[bot])
+    
     scheduler.start()
 
     await bot.delete_webhook(drop_pending_updates=True)
-    print("🤖 MoneyBoss FULL CHAOS is running...")
+    print("🤖 MoneyBoss MSK EDITION is running...")
     
-    # Сразу при старте сообщаем в чат что мы онлайн и запускаем первую игру
     chat_id = db.get_chat_id()
     if chat_id:
         try:
-            await bot.send_message(chat_id, "🚀 MoneyBoss вернулся в строй! Начинаем контролируемый хаос... Кто готов делать бабки?")
-            await trigger_random_event(bot)
+            await bot.send_message(chat_id, "🚀 MoneyBoss в режиме МСК! Проверка времени... Идем по графику!")
         except: pass
 
     await dp.start_polling(bot)
