@@ -98,12 +98,22 @@ class Database:
                 cursor.execute("UPDATE users SET total_earned = total_earned + ?, debt = debt + ? WHERE user_id = ?", (income, tax, user_id))
             conn.commit()
 
-    def get_random_user(self):
+    def get_lazy_user(self, exclude_ids: list):
+        """Выбирает случайного пользователя с 0 доходом, исключая админов"""
         with self.connect() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT username FROM users WHERE username IS NOT NULL ORDER BY RANDOM() LIMIT 1")
+            # Пробуем найти тех, у кого доход 0
+            placeholders = ', '.join(['?'] * len(exclude_ids))
+            query = f"SELECT username FROM users WHERE total_earned = 0 AND username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
+            cursor.execute(query, exclude_ids)
             res = cursor.fetchone()
-            return res[0] if res else "Миллионер"
+            if res: return res[0]
+            
+            # Если все молодцы и заработали, берем любого не-админа
+            query = f"SELECT username FROM users WHERE username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
+            cursor.execute(query, exclude_ids)
+            res = cursor.fetchone()
+            return res[0] if res else None
 
     def get_top_users(self, limit=10):
         with self.connect() as conn:
@@ -112,6 +122,11 @@ class Database:
             return cursor.fetchall()
 
 db = Database(DB_NAME)
+
+# --- ADMINS LIST ---
+# Сюда добавь свой ID и ID других админов
+# Свой ID можно узнать у бота @userinfobot
+ADMIN_IDS = [12345678, 8289097456] # Замени на реальные ID
 
 # --- AI LOGIC WITH VISION ---
 async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None) -> str:
@@ -236,11 +251,22 @@ async def evening(bot: Bot):
     await bot.send_message(GROUP_CHAT_ID, f"🌙 СЛАДКИХ СНОВ\n\n{res}")
 
 async def silence(bot: Bot):
+    global last_msg_time
     if not GROUP_CHAT_ID: return
-    if (datetime.now() - last_msg_time).total_seconds() > 2400: # 40 min
-        tag = db.get_random_user()
-        res = await get_ai_response(f"В чате тишина — наедь на @{tag} почему он не богат", 0, "Система")
+    
+    now = datetime.now()
+    # Детектор тишины работает только с 10:00 до 22:00
+    if not (10 <= now.hour < 22):
+        return
+
+    if (now - last_msg_time).total_seconds() > 2400: # 40 min
+        target = db.get_lazy_user(ADMIN_IDS)
+        if not target: return
+        
+        res = await get_ai_response(f"В чате тишина 40 минут — наедь на @{target} почему он не богат и молчит", 0, "Система")
         await bot.send_message(GROUP_CHAT_ID, res)
+        # ВАЖНО: Обновляем время, чтобы бот не спамил сам за собой
+        last_msg_time = datetime.now()
 
 async def main():
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
