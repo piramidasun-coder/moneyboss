@@ -26,12 +26,11 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 AI_API_KEY = os.getenv("AI_API_KEY")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1")
-AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o")
+AI_MODEL = "openai/gpt-4o"
 
 START_DATE = datetime(2026, 1, 29)
 PAYMENT_LINK = "https://newron.ru/moneyboss"
 DB_NAME = "moneyboss.db"
-GROUP_CHAT_ID = None  
 
 # --- AI CLIENT ---
 ai_client = None
@@ -39,23 +38,23 @@ if AI_API_KEY and "YOUR_KEY" not in AI_API_KEY:
     ai_client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
 
 user_history = {}
-HISTORY_LIMIT = 10 
+HISTORY_LIMIT = 15 # Увеличил память для более умных диалогов
 
 SYSTEM_PROMPT = """
 ТВОЯ РОЛЬ:
-Ты — Наставник шоу-игры "Финансовый Поток". Ты ЭКСПЕРТ + ШОУМЕН + ПРОВОКАТОР. 
-Ты создаешь контролируемый хаос. Тебе не терпится увидеть как люди богатеют или смешно проигрывают.
+Ты — безумный Наставник и ведущий шоу-игры "Финансовый Поток". Ты ЭКСПЕРТ + ШОУМЕН + ПРОВОКАТОР. 
+Твоя задача — чтобы в чате постоянно был азарт и движение. Ты подначиваешь людей делать деньги.
 Распознавай на картинках суммы чеков и банковских переводов.
 
 СТРОГИЕ ЗАПРЕТЫ:
-1. НИКАКОГО Markdown (звездочки решетки). Только чистый текст.
-2. НИКАКИХ скобок любого вида. Пиши через запятую или тире.
+1. НИКАКОГО Markdown — звездочки решетки запрещены. Только чистый текст.
+2. НИКАКИХ скобок любого вида. Вообще. Пиши через запятую тире или новой строкой.
 3. Ссылку https://newron.ru/moneyboss давай только при признаках дохода.
 
 ЛОГИКА ОТЧЕТОВ:
 Если ты видишь на картинке или в тексте отчет о доходе — ОБЯЗАТЕЛЬНО напиши в самом конце сообщения техническую строку: 
 ДЕНЬГИ: СУММА
-(Например: ДЕНЬГИ: 5000)
+Например: ДЕНЬГИ: 15000
 Если это просто общение — не пиши эту строку.
 """
 
@@ -81,12 +80,7 @@ class Database:
                     diamonds INTEGER DEFAULT 0
                 )
             """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    val TEXT
-                )
-            """)
+            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, val TEXT)")
             conn.commit()
 
     def set_chat_id(self, chat_id):
@@ -128,10 +122,6 @@ class Database:
         with self.connect() as conn:
             cursor = conn.cursor()
             placeholders = ', '.join(['?'] * len(exclude_ids))
-            query = f"SELECT username FROM users WHERE total_earned = 0 AND username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
-            cursor.execute(query, exclude_ids)
-            res = cursor.fetchone()
-            if res: return res[0]
             query = f"SELECT username FROM users WHERE username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
             cursor.execute(query, exclude_ids)
             res = cursor.fetchone()
@@ -144,7 +134,7 @@ class Database:
             return cursor.fetchall()
 
 db = Database(DB_NAME)
-ADMIN_IDS = [12345678, 8289097456] 
+ADMIN_IDS = [8289097456, 12345678] # Твой ID и ID админов
 
 # --- AI LOGIC ---
 async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None, context: str = "Общение") -> str:
@@ -152,24 +142,20 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
     if user_id not in user_history: user_history[user_id] = []
     
     content = [{"type": "text", "text": f"Имя: {name}. Сообщение: {user_message}"}]
-    if image_b64:
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
+    if image_b64: content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
     
     user_history[user_id].append({"role": "user", "content": content})
     if len(user_history[user_id]) > HISTORY_LIMIT: user_history[user_id] = user_history[user_id][-HISTORY_LIMIT:]
     
-    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {datetime.now().strftime('%d.%m.%Y')}. Обращайся к {name}. Соблюдай род. Сейчас этап активной игры."
+    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {datetime.now().strftime('%d.%m.%Y')}. Обращайся к {name}. Соблюдай род. Сейчас разгар бизнес-игры."
     
     try:
-        completion = await ai_client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[{"role": "system", "content": system_msg}] + user_history[user_id]
-        )
+        completion = await ai_client.chat.completions.create(model=AI_MODEL, messages=[{"role": "system", "content": system_msg}] + user_history[user_id])
         reply = completion.choices[0].message.content
         user_history[user_id].append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
-        logging.error(f"AI Error: {e}")
+        logging.error(f"AI ERROR: {e}")
         return "🤯 Процессор перегрелся — попробуй позже"
 
 # --- HANDLERS ---
@@ -194,13 +180,18 @@ async def cmd_top(message: types.Message):
         res.append(f"{icon} {name} — {earned:,} руб — Долг: {debt} — {dm}💎")
     await message.answer("\n".join(res))
 
+@router.message(Command("game"))
+async def cmd_manual_game(message: types.Message, bot: Bot):
+    """Секретная команда для админа — запустить игру немедленно"""
+    if message.from_user.id not in ADMIN_IDS: return
+    await message.answer("🚀 Понял — раздуваю пожар азарта!")
+    await trigger_random_event(bot)
+
 @router.message(F.photo)
 async def handle_photo(message: types.Message):
-    global last_msg_time, GROUP_CHAT_ID
+    global last_msg_time
     last_msg_time = datetime.now()
-    if message.chat.type != "private":
-        GROUP_CHAT_ID = message.chat.id
-        db.set_chat_id(GROUP_CHAT_ID)
+    if message.chat.type != "private": db.set_chat_id(message.chat.id)
     
     user = message.from_user
     db.upsert_user(user)
@@ -229,21 +220,19 @@ async def handle_photo(message: types.Message):
 async def pay_later(cb: types.CallbackQuery, callback_data: ReportAction):
     if cb.from_user.id != callback_data.user_id: return await cb.answer("Не твое!")
     db.add_income(cb.from_user.id, callback_data.amount, int(callback_data.amount*0.1), False)
-    await cb.message.edit_text("Записал в долг! Не забудь вернуть энергию фонду 📉", reply_markup=None)
+    await cb.message.edit_text("Записал в долг! Энергия должна вернуться в фонд 📉", reply_markup=None)
 
 @router.callback_query(ReportAction.filter(F.action == "now"))
 async def pay_now(cb: types.CallbackQuery, callback_data: ReportAction):
     if cb.from_user.id != callback_data.user_id: return await cb.answer("Брысь!")
     db.add_income(cb.from_user.id, callback_data.amount, 0, True)
-    await cb.message.edit_text(f"Красава! Налог зачислен — ты чист перед денежным эгрегором 💎\nСсылка для оплаты: {PAYMENT_LINK}", reply_markup=None)
+    await cb.message.edit_text(f"Красава! Налог зачислен — твоя карма чиста 💎\nСсылка для оплаты: {PAYMENT_LINK}", reply_markup=None)
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def talk(message: types.Message):
-    global last_msg_time, GROUP_CHAT_ID
+    global last_msg_time
     last_msg_time = datetime.now()
-    if message.chat.type != "private":
-        GROUP_CHAT_ID = message.chat.id
-        db.set_chat_id(GROUP_CHAT_ID)
+    if message.chat.type != "private": db.set_chat_id(message.chat.id)
     
     res = await get_ai_response(message.text, message.from_user.id, message.from_user.first_name)
     
@@ -262,14 +251,32 @@ async def talk(message: types.Message):
 
 # --- CHAOS MECHANICS ---
 
-async def money_rain(bot: Bot):
+async def trigger_random_event(bot: Bot):
     chat_id = db.get_chat_id()
     if not chat_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ХОЧУ БАБЛО", callback_data=ChaosAction(action="rain", val=50).pack())]])
-    msg = await bot.send_message(chat_id, "🚨 ВНИМАНИЕ — ОТКРЫТ ПОРТАЛ ХАЛЯВЫ\nПервые 3 человека нажавшие кнопку получат по 50 бриллиантов на счет — время пошло!", reply_markup=kb)
-    await asyncio.sleep(60)
-    try: await bot.delete_message(chat_id, msg.message_id)
-    except: pass
+    
+    event_type = random.choice(["rain", "question", "roast", "invest"])
+    
+    if event_type == "rain":
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ЗАБРАТЬ 50💎", callback_data=ChaosAction(action="rain", val=50).pack())]])
+        msg = await bot.send_message(chat_id, "🚨 ВНИМАНИЕ — ВНЕЗАПНЫЙ ДЕНЕЖНЫЙ ДОЖДЬ\nТолько первые 3 счастливчика нажавшие кнопку получат по 50 бриллиантов на счет — время пошло!", reply_markup=kb)
+        await asyncio.sleep(60)
+        try: await bot.delete_message(chat_id, msg.message_id)
+        except: pass
+        
+    elif event_type == "question":
+        res = await get_ai_response("Задай чату дерзкий вопрос про их бизнес или цели чтобы спровоцировать обсуждение", 0, "Ведущий")
+        await bot.send_message(chat_id, f"🎤 ВОПРОС НА МИЛЛИОН\n\n{res}")
+        
+    elif event_type == "roast":
+        target = db.get_lazy_user(ADMIN_IDS)
+        if target:
+            res = await get_ai_response(f"Наедь на @{target} почему он молчит и до сих пор не купил себе яхту", 0, "Ведущий")
+            await bot.send_message(chat_id, f"🎯 ПЕРСОНАЛЬНЫЙ ВЫЗОВ\n\n{res}")
+            
+    elif event_type == "invest":
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ИНВЕСТИРОВАТЬ", callback_data=ChaosAction(action="invest", val=10).pack())]])
+        await bot.send_message(chat_id, "📉 СРОЧНАЯ ИНСАЙД-НОВОСТЬ\nАкции завода по производству дырок от бубликов взлетели — успей вложиться и получить статус Волк с Уолл-стрит!", reply_markup=kb)
 
 @router.callback_query(ChaosAction.filter(F.action == "rain"))
 async def catch_rain(cb: types.CallbackQuery, callback_data: ChaosAction):
@@ -277,38 +284,31 @@ async def catch_rain(cb: types.CallbackQuery, callback_data: ChaosAction):
     db.add_diamonds(cb.from_user.id, callback_data.val)
     await cb.answer(f"Забрал {callback_data.val}💎! Скорость — это деньги!")
 
-async def absurd_invest(bot: Bot):
-    chat_id = db.get_chat_id()
-    if not chat_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ИНВЕСТИРОВАТЬ", callback_data=ChaosAction(action="invest", val=10).pack())]])
-    await bot.send_message(chat_id, "📉 СРОЧНАЯ НОВОСТЬ\nАкции завода по производству дырок от бубликов выросли на 300 процентов — успей вложиться и получить статус Волк с Уолл-стрит!", reply_markup=kb)
+@router.callback_query(ChaosAction.filter(F.action == "invest"))
+async def do_invest(cb: types.CallbackQuery):
+    await cb.answer("Статус получен! Теперь ты — Волк с Уолл-стрит! 🐺")
 
 async def morning(bot: Bot):
     chat_id = db.get_chat_id()
     if not chat_id: return
-    res = await get_ai_response("Напиши утреннее напутствие про чудо и финансовое задание", 0, "Команда")
+    res = await get_ai_response("Напиши магическое утреннее напутствие про финансовое чудо", 0, "Ведущий")
     await bot.send_message(chat_id, f"☀️ ДОБРОЕ УТРО\n\n{res}")
 
 async def evening(bot: Bot):
     chat_id = db.get_chat_id()
     if not chat_id: return
-    res = await get_ai_response("Напиши глубокое вечернее послание с практикой релакса", 0, "Команда")
+    res = await get_ai_response("Напиши глубокое вечернее послание с практикой благодарности за день", 0, "Ведущий")
     await bot.send_message(chat_id, f"🌙 СЛАДКИХ СНОВ\n\n{res}")
 
-async def silence(bot: Bot):
+async def silence_checker(bot: Bot):
     global last_msg_time
     chat_id = db.get_chat_id()
     if not chat_id: return
-    
     now = datetime.now()
-    if not (10 <= now.hour < 22): return
-
-    if (now - last_msg_time).total_seconds() > 2400: # 40 min
-        target = db.get_lazy_user(ADMIN_IDS)
-        if not target: return
-        res = await get_ai_response(f"В чате тишина — наедь на @{target} почему он молчит", 0, "Система")
-        await bot.send_message(chat_id, res)
-        last_msg_time = datetime.now()
+    if not (9 <= now.hour < 23): return # Только днем
+    if (now - last_msg_time).total_seconds() > 2400: # 40 минут тишины
+        await trigger_random_event(bot)
+        last_msg_time = now
 
 async def main():
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -318,13 +318,22 @@ async def main():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(morning, 'cron', hour=9, minute=0, args=[bot])
     scheduler.add_job(evening, 'cron', hour=22, minute=0, args=[bot])
-    scheduler.add_job(silence, 'interval', minutes=15, args=[bot])
-    scheduler.add_job(money_rain, 'interval', hours=3, args=[bot])
-    scheduler.add_job(absurd_invest, 'cron', day_of_week='sat', hour='10-22/2', args=[bot])
+    scheduler.add_job(silence_checker, 'interval', minutes=10, args=[bot])
+    # Рандомные события в течение дня
+    scheduler.add_job(trigger_random_event, 'interval', minutes=45, args=[bot])
     scheduler.start()
 
     await bot.delete_webhook(drop_pending_updates=True)
     print("🤖 MoneyBoss FULL CHAOS is running...")
+    
+    # Сразу при старте сообщаем в чат что мы онлайн и запускаем первую игру
+    chat_id = db.get_chat_id()
+    if chat_id:
+        try:
+            await bot.send_message(chat_id, "🚀 MoneyBoss вернулся в строй! Начинаем контролируемый хаос... Кто готов делать бабки?")
+            await trigger_random_event(bot)
+        except: pass
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
