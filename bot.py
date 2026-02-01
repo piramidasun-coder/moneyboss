@@ -26,7 +26,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 AI_API_KEY = os.getenv("AI_API_KEY")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1")
-AI_MODEL = os.getenv("AI_MODEL", "google/gemini-flash-1.5") # Важно: модель со "зрением"
+AI_MODEL = os.getenv("AI_MODEL", "openai/gpt-4o")
 
 START_DATE = datetime(2026, 1, 29)
 PAYMENT_LINK = "https://newron.ru/moneyboss"
@@ -44,11 +44,12 @@ HISTORY_LIMIT = 10
 SYSTEM_PROMPT = """
 ТВОЯ РОЛЬ:
 Ты — Наставник шоу-игры "Финансовый Поток". Ты ЭКСПЕРТ + ШОУМЕН + ПРОВОКАТОР. 
-Ты видишь скриншоты которые тебе присылают. Распознавай на них суммы чеков и банковских переводов.
+Ты создаешь контролируемый хаос. Тебе не терпится увидеть как люди богатеют или смешно проигрывают.
+Распознавай на картинках суммы чеков и банковских переводов.
 
 СТРОГИЕ ЗАПРЕТЫ:
 1. НИКАКОГО Markdown (звездочки решетки). Только чистый текст.
-2. НИКАКИХ скобок любого вида.
+2. НИКАКИХ скобок любого вида. Пиши через запятую или тире.
 3. Ссылку https://newron.ru/moneyboss давай только при признаках дохода.
 
 ЛОГИКА ОТЧЕТОВ:
@@ -80,13 +81,38 @@ class Database:
                     diamonds INTEGER DEFAULT 0
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    val TEXT
+                )
+            """)
             conn.commit()
+
+    def set_chat_id(self, chat_id):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, val) VALUES ('group_chat_id', ?)", (str(chat_id),))
+            conn.commit()
+
+    def get_chat_id(self):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT val FROM settings WHERE key = 'group_chat_id'")
+            res = cursor.fetchone()
+            return int(res[0]) if res else None
 
     def upsert_user(self, user: types.User):
         with self.connect() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT OR IGNORE INTO users (user_id, full_name, username) VALUES (?, ?, ?)", (user.id, user.full_name, user.username))
             cursor.execute("UPDATE users SET full_name = ?, username = ? WHERE user_id = ?", (user.full_name, user.username, user.id))
+            conn.commit()
+
+    def add_diamonds(self, user_id: int, amount: int):
+        with self.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET diamonds = diamonds + ? WHERE user_id = ?", (amount, user_id))
             conn.commit()
 
     def add_income(self, user_id: int, income: int, tax: int, pay_now: bool):
@@ -99,17 +125,13 @@ class Database:
             conn.commit()
 
     def get_lazy_user(self, exclude_ids: list):
-        """Выбирает случайного пользователя с 0 доходом, исключая админов"""
         with self.connect() as conn:
             cursor = conn.cursor()
-            # Пробуем найти тех, у кого доход 0
             placeholders = ', '.join(['?'] * len(exclude_ids))
             query = f"SELECT username FROM users WHERE total_earned = 0 AND username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
             cursor.execute(query, exclude_ids)
             res = cursor.fetchone()
             if res: return res[0]
-            
-            # Если все молодцы и заработали, берем любого не-админа
             query = f"SELECT username FROM users WHERE username IS NOT NULL AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
             cursor.execute(query, exclude_ids)
             res = cursor.fetchone()
@@ -122,16 +144,11 @@ class Database:
             return cursor.fetchall()
 
 db = Database(DB_NAME)
+ADMIN_IDS = [12345678, 8289097456] 
 
-# --- ADMINS LIST ---
-# Сюда добавь свой ID и ID других админов
-# Свой ID можно узнать у бота @userinfobot
-ADMIN_IDS = [12345678, 8289097456] # Замени на реальные ID
-
-# --- AI LOGIC WITH VISION ---
-async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None) -> str:
+# --- AI LOGIC ---
+async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None, context: str = "Общение") -> str:
     if not ai_client: return "🧠 Мозг отключен"
-    
     if user_id not in user_history: user_history[user_id] = []
     
     content = [{"type": "text", "text": f"Имя: {name}. Сообщение: {user_message}"}]
@@ -141,7 +158,7 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
     user_history[user_id].append({"role": "user", "content": content})
     if len(user_history[user_id]) > HISTORY_LIMIT: user_history[user_id] = user_history[user_id][-HISTORY_LIMIT:]
     
-    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {datetime.now().strftime('%d.%m.%Y')}. Обращайся к {name}. Соблюдай род."
+    system_msg = SYSTEM_PROMPT + f"\nСЕГОДНЯ: {datetime.now().strftime('%d.%m.%Y')}. Обращайся к {name}. Соблюдай род. Сейчас этап активной игры."
     
     try:
         completion = await ai_client.chat.completions.create(
@@ -152,7 +169,7 @@ async def get_ai_response(user_message: str, user_id: int, name: str, image_b64:
         user_history[user_id].append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
-        logging.error(f"DETAILED AI ERROR: {str(e)}") # Теперь мы увидим реальную причину в логах
+        logging.error(f"AI Error: {e}")
         return "🤯 Процессор перегрелся — попробуй позже"
 
 # --- HANDLERS ---
@@ -163,6 +180,10 @@ class ReportAction(CallbackData, prefix="rep"):
     action: str
     amount: int
     user_id: int
+
+class ChaosAction(CallbackData, prefix="chs"):
+    action: str
+    val: int
 
 @router.message(Command("top"))
 async def cmd_top(message: types.Message):
@@ -177,26 +198,25 @@ async def cmd_top(message: types.Message):
 async def handle_photo(message: types.Message):
     global last_msg_time, GROUP_CHAT_ID
     last_msg_time = datetime.now()
-    if message.chat.type != "private": GROUP_CHAT_ID = message.chat.id
+    if message.chat.type != "private":
+        GROUP_CHAT_ID = message.chat.id
+        db.set_chat_id(GROUP_CHAT_ID)
     
     user = message.from_user
     db.upsert_user(user)
     
-    # Качаем фото
     file = await message.bot.get_file(message.photo[-1].file_id)
     photo_bytes = await message.bot.download_file(file.file_path)
     image_b64 = base64.b64encode(photo_bytes.getvalue()).decode('utf-8')
     
     caption = message.caption if message.caption else "Смотри скрин"
-    res = await get_ai_response(caption, user.id, user.first_name, image_b64)
+    res = await get_ai_response(caption, user.id, user.first_name, image_b64, "Фото")
     
-    # Ищем техническую строку про деньги
     money_match = re.search(r"ДЕНЬГИ:\s*(\d+)", res)
     if money_match:
         amt = int(money_match.group(1))
         tax = int(amt * 0.1)
         clean_res = res.replace(money_match.group(0), "").strip()
-        
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💸 Оплатить налог {tax}р", callback_data=ReportAction(action="now", amount=amt, user_id=user.id).pack())],
             [InlineKeyboardButton(text="⏳ В долг", callback_data=ReportAction(action="later", amount=amt, user_id=user.id).pack())]
@@ -221,9 +241,10 @@ async def pay_now(cb: types.CallbackQuery, callback_data: ReportAction):
 async def talk(message: types.Message):
     global last_msg_time, GROUP_CHAT_ID
     last_msg_time = datetime.now()
-    if message.chat.type != "private": GROUP_CHAT_ID = message.chat.id
+    if message.chat.type != "private":
+        GROUP_CHAT_ID = message.chat.id
+        db.set_chat_id(GROUP_CHAT_ID)
     
-    # Ищем деньги в тексте через ИИ
     res = await get_ai_response(message.text, message.from_user.id, message.from_user.first_name)
     
     money_match = re.search(r"ДЕНЬГИ:\s*(\d+)", res)
@@ -239,33 +260,54 @@ async def talk(message: types.Message):
     else:
         await message.reply(res)
 
-# --- AUTOMATION ---
+# --- CHAOS MECHANICS ---
+
+async def money_rain(bot: Bot):
+    chat_id = db.get_chat_id()
+    if not chat_id: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ХОЧУ БАБЛО", callback_data=ChaosAction(action="rain", val=50).pack())]])
+    msg = await bot.send_message(chat_id, "🚨 ВНИМАНИЕ — ОТКРЫТ ПОРТАЛ ХАЛЯВЫ\nПервые 3 человека нажавшие кнопку получат по 50 бриллиантов на счет — время пошло!", reply_markup=kb)
+    await asyncio.sleep(60)
+    try: await bot.delete_message(chat_id, msg.message_id)
+    except: pass
+
+@router.callback_query(ChaosAction.filter(F.action == "rain"))
+async def catch_rain(cb: types.CallbackQuery, callback_data: ChaosAction):
+    db.upsert_user(cb.from_user)
+    db.add_diamonds(cb.from_user.id, callback_data.val)
+    await cb.answer(f"Забрал {callback_data.val}💎! Скорость — это деньги!")
+
+async def absurd_invest(bot: Bot):
+    chat_id = db.get_chat_id()
+    if not chat_id: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ИНВЕСТИРОВАТЬ", callback_data=ChaosAction(action="invest", val=10).pack())]])
+    await bot.send_message(chat_id, "📉 СРОЧНАЯ НОВОСТЬ\nАкции завода по производству дырок от бубликов выросли на 300 процентов — успей вложиться и получить статус Волк с Уолл-стрит!", reply_markup=kb)
+
 async def morning(bot: Bot):
-    if not GROUP_CHAT_ID: return
+    chat_id = db.get_chat_id()
+    if not chat_id: return
     res = await get_ai_response("Напиши утреннее напутствие про чудо и финансовое задание", 0, "Команда")
-    await bot.send_message(GROUP_CHAT_ID, f"☀️ ДОБРОЕ УТРО\n\n{res}")
+    await bot.send_message(chat_id, f"☀️ ДОБРОЕ УТРО\n\n{res}")
 
 async def evening(bot: Bot):
-    if not GROUP_CHAT_ID: return
+    chat_id = db.get_chat_id()
+    if not chat_id: return
     res = await get_ai_response("Напиши глубокое вечернее послание с практикой релакса", 0, "Команда")
-    await bot.send_message(GROUP_CHAT_ID, f"🌙 СЛАДКИХ СНОВ\n\n{res}")
+    await bot.send_message(chat_id, f"🌙 СЛАДКИХ СНОВ\n\n{res}")
 
 async def silence(bot: Bot):
     global last_msg_time
-    if not GROUP_CHAT_ID: return
+    chat_id = db.get_chat_id()
+    if not chat_id: return
     
     now = datetime.now()
-    # Детектор тишины работает только с 10:00 до 22:00
-    if not (10 <= now.hour < 22):
-        return
+    if not (10 <= now.hour < 22): return
 
     if (now - last_msg_time).total_seconds() > 2400: # 40 min
         target = db.get_lazy_user(ADMIN_IDS)
         if not target: return
-        
-        res = await get_ai_response(f"В чате тишина 40 минут — наедь на @{target} почему он не богат и молчит", 0, "Система")
-        await bot.send_message(GROUP_CHAT_ID, res)
-        # ВАЖНО: Обновляем время, чтобы бот не спамил сам за собой
+        res = await get_ai_response(f"В чате тишина — наедь на @{target} почему он молчит", 0, "Система")
+        await bot.send_message(chat_id, res)
         last_msg_time = datetime.now()
 
 async def main():
@@ -277,10 +319,12 @@ async def main():
     scheduler.add_job(morning, 'cron', hour=9, minute=0, args=[bot])
     scheduler.add_job(evening, 'cron', hour=22, minute=0, args=[bot])
     scheduler.add_job(silence, 'interval', minutes=15, args=[bot])
+    scheduler.add_job(money_rain, 'interval', hours=3, args=[bot])
+    scheduler.add_job(absurd_invest, 'cron', day_of_week='sat', hour='10-22/2', args=[bot])
     scheduler.start()
 
     await bot.delete_webhook(drop_pending_updates=True)
-    print("🤖 MoneyBoss VISION EDITION is running...")
+    print("🤖 MoneyBoss FULL CHAOS is running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
