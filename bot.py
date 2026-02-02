@@ -259,7 +259,7 @@ async def trigger_random_event(bot: Bot):
     chat_id = db.get_chat_id()
     if not chat_id: return
     
-    event_type = random.choice(["rain", "question", "roast", "invest"])
+    event_type = random.choice(["rain", "question", "roast", "wisdom"])
     
     if event_type == "rain":
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ЗАБРАТЬ 50💎", callback_data=ChaosAction(action="rain", val=50).pack())]])
@@ -278,19 +278,15 @@ async def trigger_random_event(bot: Bot):
             res = await get_ai_response(f"Наедь на @{target} почему он молчит и до сих пор не купил себе яхту", 0, "Ведущий")
             await bot.send_message(chat_id, f"🎯 ПЕРСОНАЛЬНЫЙ ВЫЗОВ\n\n{res}")
             
-    elif event_type == "invest":
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="ИНВЕСТИРОВАТЬ", callback_data=ChaosAction(action="invest", val=10).pack())]])
-        await bot.send_message(chat_id, "📉 СРОЧНАЯ ИНСАЙД-НОВОСТЬ\nАкции завода по производству дырок от бубликов взлетели — успей вложиться и получить статус Волк с Уолл-стрит!", reply_markup=kb)
+    elif event_type == "wisdom":
+        res = await get_ai_response("Поделись очень коротким но глубоким инсайтом про деньги или продуктивность. Вызови WOW-эффект.", 0, "Ведущий")
+        await bot.send_message(chat_id, f"💡 ИНСАЙТ ДНЯ\n\n{res}")
 
 @router.callback_query(ChaosAction.filter(F.action == "rain"))
 async def catch_rain(cb: types.CallbackQuery, callback_data: ChaosAction):
     db.upsert_user(cb.from_user)
     db.add_diamonds(cb.from_user.id, callback_data.val)
     await cb.answer(f"Забрал {callback_data.val}💎! Скорость — это деньги!")
-
-@router.callback_query(ChaosAction.filter(F.action == "invest"))
-async def do_invest(cb: types.CallbackQuery):
-    await cb.answer("Статус получен! Теперь ты — Волк с Уолл-стрит! 🐺")
 
 async def morning(bot: Bot):
     chat_id = db.get_chat_id()
@@ -333,10 +329,8 @@ async def main():
     
     # Проверка тишины каждые 10 минут
     scheduler.add_job(silence_checker, 'interval', minutes=10, args=[bot])
-    
-    # Рандомные события каждые 45 минут (только в рабочее время МСК для азарта)
+    # Рандомные события в течение дня
     scheduler.add_job(trigger_random_event, 'interval', minutes=45, args=[bot])
-    
     scheduler.start()
 
     await bot.delete_webhook(drop_pending_updates=True)
