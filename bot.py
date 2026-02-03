@@ -189,10 +189,18 @@ async def cmd_manual_game(message: types.Message, bot: Bot):
     await message.answer("🚀 Понял — раздуваю пожар азарта!")
     await trigger_random_event(bot)
 
+@router.message(Command("myid"))
+async def cmd_myid(message: types.Message):
+    """Узнать свой ID"""
+    await message.answer(f"Твой ID: {message.from_user.id}")
+
 @router.message(Command("shout"))
 async def cmd_shout(message: types.Message, bot: Bot):
     """Массовый призыв молчунов. Использование: /shout @nick1 @nick2..."""
-    if message.from_user.id not in ADMIN_IDS: return
+    # Добавляем временное разрешение для ТЕБЯ (пока не узнаем точный ID)
+    # Если ты - Джульета, бот тебя узнает по имени
+    if message.from_user.id not in ADMIN_IDS and message.from_user.first_name != "Джульета":
+        return await message.answer("У тебя нет прав вождя!")
     
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -200,15 +208,21 @@ async def cmd_shout(message: types.Message, bot: Bot):
     
     nicks = args[1]
     
-    # Генерируем дерзкий текст через ИИ
-    res = await get_ai_response(
-        f"Напиши один общий супер-дерзкий и смешной призыв для этих людей: {nicks}. Скажи что завтра финал игры а они сидят как мышки. Пусть активируются на максимум или уходят. Без скобок. Без Markdown.", 
-        0, "Ведущий"
-    )
+    chat_id = db.get_chat_id()
+    if not chat_id:
+        return await message.answer("Я еще не запомнил ID группы. Напиши любое сообщение в группе!")
+
+    await message.answer("🚀 Понял, готовлю разнос для молчунов...")
     
-    # Отправляем сообщение в чат
-    chat_id = db.get_chat_id() or message.chat.id
-    await bot.send_message(chat_id, f"📢 <b>ОБЩИЙ СБОР МОЛЧУНОВ</b>\n\n{res}\n\n{nicks}")
+    try:
+        res = await get_ai_response(
+            f"Напиши один общий супер-дерзкий и смешной призыв для этих людей: {nicks}. Скажи что завтра финал игры а они сидят как мышки. Пусть активируются на максимум или уходят. Без скобок. Без Markdown.", 
+            0, "Ведущий"
+        )
+        await bot.send_message(chat_id, f"📢 <b>ОБЩИЙ СБОР МОЛЧУНОВ</b>\n\n{res}\n\n{nicks}")
+        await message.answer("✅ Отправил в группу!")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {e}")
 
 @router.message(F.photo)
 async def handle_photo(message: types.Message):
