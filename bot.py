@@ -265,6 +265,51 @@ async def pay_now(cb: types.CallbackQuery, callback_data: ReportAction):
     db.add_income(cb.from_user.id, callback_data.amount, 0, True)
     await cb.message.edit_text(f"Красава! Налог зачислен — твоя карма чиста 💎\nСсылка для оплаты: {PAYMENT_LINK}", reply_markup=None)
 
+# --- HUNT LOGIC ---
+hunt_queue = []
+is_hunting = False
+
+async def start_hunt_loop(bot: Bot, chat_id: int):
+    global is_hunting
+    while hunt_queue:
+        is_hunting = True
+        username = hunt_queue.pop(0)
+        
+        # Генерируем личное душевное послание
+        prompt = f"Напиши очень личное, душевное, смешное и классное обращение к участнику {username}. Скажи что игра завтра в 23:59 закроется и ты (бот) перестанешь ему помогать. Спроси почему он тебя не использует и не пишет. Вызови улыбку и азарт. Будь как лучший друг который немного ворчит. Без скобок. Без Markdown."
+        
+        try:
+            res = await get_ai_response(prompt, 0, "Ведущий")
+            await bot.send_message(chat_id, f"{res}\n\n{username}")
+        except Exception as e:
+            logging.error(f"Hunt error: {e}")
+        
+        # Ждем 2-3 минуты перед следующим человеком
+        if hunt_queue:
+            await asyncio.sleep(random.randint(120, 180))
+    
+    is_hunting = False
+
+@router.message(Command("hunt"))
+async def cmd_hunt(message: types.Message, bot: Bot):
+    """Запуск личной охоты на молчунов. Использование: /hunt @nick1 @nick2..."""
+    if message.from_user.id not in ADMIN_IDS: return
+    
+    global hunt_queue
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await message.answer("Пиши так: /hunt @nick1 @nick2 ...")
+    
+    # Собираем все ники в очередь
+    new_nicks = [n.strip() for n in args[1].split() if n.startswith("@")]
+    hunt_queue.extend(new_nicks)
+    
+    chat_id = db.get_chat_id() or message.chat.id
+    await message.answer(f"🚀 Охота началась! В очереди {len(hunt_queue)} человек. Буду писать каждому лично каждые 2-3 минуты.")
+    
+    if not is_hunting:
+        asyncio.create_task(start_hunt_loop(bot, chat_id))
+
 @router.message(F.text)
 async def talk(message: types.Message, bot: Bot):
     global last_msg_time, GROUP_CHAT_ID
