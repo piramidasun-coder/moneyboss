@@ -265,14 +265,26 @@ async def pay_now(cb: types.CallbackQuery, callback_data: ReportAction):
     db.add_income(cb.from_user.id, callback_data.amount, 0, True)
     await cb.message.edit_text(f"Красава! Налог зачислен — твоя карма чиста 💎\nСсылка для оплаты: {PAYMENT_LINK}", reply_markup=None)
 
-@router.message(F.text & ~F.text.startswith("/"))
-async def talk(message: types.Message):
+@router.message(F.text)
+async def talk(message: types.Message, bot: Bot):
     global last_msg_time, GROUP_CHAT_ID
     last_msg_time = datetime.now(MSK)
-    if message.chat.type != "private": 
+    
+    if message.chat.type in ["group", "supergroup"]:
         GROUP_CHAT_ID = message.chat.id
         db.set_chat_id(GROUP_CHAT_ID)
-    
+
+    # Гибкая проверка команд для админа
+    if message.from_user.id in ADMIN_IDS:
+        text = message.text.lower()
+        if "/shout" in text:
+            return await cmd_shout(message, bot)
+        if "/game" in text:
+            return await cmd_manual_game(message, bot)
+        if "/myid" in text:
+            return await cmd_myid(message)
+
+    # Обычный разговор с ИИ
     res = await get_ai_response(message.text, message.from_user.id, message.from_user.first_name)
     
     money_match = re.search(r"ДЕНЬГИ:\s*(\d+)", res)
