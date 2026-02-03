@@ -189,6 +189,27 @@ async def cmd_manual_game(message: types.Message, bot: Bot):
     await message.answer("🚀 Понял — раздуваю пожар азарта!")
     await trigger_random_event(bot)
 
+@router.message(Command("shout"))
+async def cmd_shout(message: types.Message, bot: Bot):
+    """Массовый призыв молчунов. Использование: /shout @nick1 @nick2..."""
+    if message.from_user.id not in ADMIN_IDS: return
+    
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await message.answer("Пиши так: /shout @nick1 @nick2 ...")
+    
+    nicks = args[1]
+    
+    # Генерируем дерзкий текст через ИИ
+    res = await get_ai_response(
+        f"Напиши один общий супер-дерзкий и смешной призыв для этих людей: {nicks}. Скажи что завтра финал игры а они сидят как мышки. Пусть активируются на максимум или уходят. Без скобок. Без Markdown.", 
+        0, "Ведущий"
+    )
+    
+    # Отправляем сообщение в чат
+    chat_id = db.get_chat_id() or message.chat.id
+    await bot.send_message(chat_id, f"📢 <b>ОБЩИЙ СБОР МОЛЧУНОВ</b>\n\n{res}\n\n{nicks}")
+
 @router.message(F.photo)
 async def handle_photo(message: types.Message):
     global last_msg_time
