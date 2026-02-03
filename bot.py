@@ -136,7 +136,7 @@ class Database:
             return cursor.fetchall()
 
 db = Database(DB_NAME)
-ADMIN_IDS = [8289097456, 12345678] 
+ADMIN_IDS = [465953770, 8289097456, 12345678] # Твой ID добавлен! 
 
 # --- AI LOGIC ---
 async def get_ai_response(user_message: str, user_id: int, name: str, image_b64: str = None, context: str = "Общение") -> str:
